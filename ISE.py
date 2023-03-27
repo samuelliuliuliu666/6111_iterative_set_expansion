@@ -6,6 +6,9 @@ import spacy_help_functions
 from spanbert import SpanBERT
 import requests
 import re
+import os
+import openai
+import time
 
 class ISE:
     
@@ -50,7 +53,7 @@ class ISE:
                 candidate_pairs.append({"tokens": entity_pair[0], "subj": entity_pair[2], "obj": entity_pair[1]})
         return candidate_pairs
     
-    def get_predicted_relations(self,spanbert,candidate_pairs,X,internal_name,t):
+    def spanbert_predicted_relations(self,spanbert,candidate_pairs,X,internal_name,t):
         new_relations = []
         duplicate_relations = []
         relation_preds = spanbert.predict(candidate_pairs)
@@ -72,6 +75,54 @@ class ISE:
                     X[key] = tup
                     new_relations.append(tup)
         return new_relations,duplicate_relations
+    
+    def gpt3_predicted_relations(self,entity_of_interest,relation,sentence,subj,obj,X):
+        new_relations = []
+        duplicate_relations = []
+        entity_pairs = spacy_help_functions.create_entity_pairs(sentence, entity_of_interest)
+        should_process = False
+        for entity_pair in entity_pairs:
+            if entity_pair[1][1] in subj and entity_pair[2][1] in obj or entity_pair[1][1] in obj and entity_pair[2][1] in subj:
+                should_process = True
+        #print(should_process)
+        if should_process:
+            sentence_text = sentence.text
+            #print(sentence_text)
+            #prompt = "Given a paragraph, extract all instances of the following relationship types as possilbe ",sentence_text,
+            prompt =  f"Given a paragraph, extract all instances of the '{relation}' relationship types as possible, if nothing is found return no relation\n" + "Output format: ['SUBJECT ENTITY', 'RELATIONSHIP', 'OBJECT ENTITY'].\n"+ f"Sample Paragraph: {sentence_text}"
+            #print("This is prompt  ", prompt)
+            #f"Sample Output: [{relation}]"
+            #print(sentence)
+            res = self.get_openai_completion(prompt, model = 'text-davinci-003', max_tokens = 100, temperature = 0.2, top_p = 1, frequency_penalty = 0, presence_penalty =0)
+            pattern = r"\['(.*?)', '(.*?)', '(.*?)'\]" #rf'.*{relation}.*\((.*),\s*(.*)\)'
+            match = re.search(pattern, res)
+            if match:
+                subject, relationship, object = match.groups()
+                #print("gpt results: " ,subject,object)
+                tup = tuple([subject,object])
+                key = subject + " " + object
+                if key in X.keys():
+                    duplicate_relations.append(tup)
+                else:
+                    X[key] = tup
+                    new_relations.append(tup)    
+            # else:
+            #     print("No match found")
+        time.sleep(1.5)
+        return new_relations,duplicate_relations
+
+    def get_openai_completion(self,prompt, model = 'text-davinci-003', max_tokens = 100, temperature = 0.2, top_p = 1, frequency_penalty = 0, presence_penalty =0):
+        response = openai.Completion.create(
+            model = model,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            frequency_penalty=frequency_penalty,
+            presence_penalty=presence_penalty
+        )
+        response_text = response['choices'][0]['text']
+        return response_text 
 
     def main(self):
         print(sys.argv)
@@ -111,7 +162,8 @@ class ISE:
         obj = self.INTEREST_ENTITY[r]['obj']
         # get the internal name of the desired predict relation
         internal_name = self.internal_relations[r]
-
+        relation = self.RELATIONS[r]
+        openai.api_key = openai_key
         visitedUrl = set()
         iteration = 0
         print("----------------------------------------------------------------------------")
@@ -128,8 +180,9 @@ class ISE:
         # Load spacy model
         spacy_model = spacy.load("en_core_web_lg")
         # Load pre-trained SpanBERT model
-        spanbert = SpanBERT("./pretrained_spanbert")
-        print(type(spanbert))
+        if method == "spanbert":
+            spanbert = SpanBERT("./pretrained_spanbert")
+        #print(type(spanbert))
         while(True):
             print("==================== Iteration:", iteration, "- Query:", q, "====================")
             print()
@@ -183,7 +236,12 @@ class ISE:
                     if len(candidate_pairs) == 0:
                         continue
                     #print(candidate_pairs)
-                    new_relations,duplicate_relations = self.get_predicted_relations(spanbert,candidate_pairs,X,internal_name,t)
+                    if method == "spanbert":
+                        new_relations,duplicate_relations = self.spanbert_predicted_relations(spanbert,candidate_pairs,X,internal_name,t)
+                    elif method == "gpt3":
+                        new_relations,duplicate_relations = self.gpt3_predicted_relations(entity_of_interest,relation,sentence,subj,obj,X)
+                        #print(new_relations)
+                        #print(duplicate_relations)
                     relations_this_web += len(new_relations)
                     #print(new_relations)
                     #print(duplicate_relations)
@@ -193,9 +251,12 @@ class ISE:
                         print("                     Input tokens:   ", [token.text for token in sentence])
                         if len(new_relations) != 0:
                             for tup in new_relations:
-                                print("             Output Confidence: ", tup[2], " ; Subject: ", tup[0], " ; Object: ", tup[1], " ;")
+                                if method == "spanbert":
+                                    print("             Output Confidence: ", tup[2], " ; Subject: ", tup[0], " ; Object: ", tup[1], " ;")
+                                elif method == "gpt3":
+                                    print("             Subject: ", tup[0], " ; Object: ", tup[1], " ;")
                             print("                 Adding to set of extracted relations")
-                        if len(duplicate_relations) != 0:
+                        if len(duplicate_relations) != 0 and method == "spanbert":
                             for tup in duplicate_relations:
                                 print("             Output Confidence: ", tup[2], " ; Subject: ", tup[0], " ; Object: ", tup[1], " ;")
                                 print("             Duplicate with lower confidence than existing record. Ignoring this.")
@@ -209,13 +270,14 @@ class ISE:
                 print()
 
             # sort X by confidence
-            X = dict(sorted(X.items(), key=lambda x: x[1][2], reverse = True))
+            if method == "spanbert":
+                X = dict(sorted(X.items(), key=lambda x: x[1][2], reverse = True))
             
             if len(X) >= k:
                 break
-
-            # select the relation that has not been queried before with the highest confidence as a new query
+            
             y_exists = False
+            # select the relation that has not been queried before with the highest confidence as a new query
             for key, val in X.items():
                 if key not in queriedTuple:
                     print("new relation to be appended to the query:", key)
@@ -223,12 +285,19 @@ class ISE:
                     y_exists = True
                     q = q + " " + key
                     break
+
             # stop if such relation y does not exists
             if y_exists == False:
                 break
             iteration += 1
 
-
+        print("================== ALL RELATIONS for ",internal_name, " ( ", len(X), " ) =================")
+        for key,val in X.items():
+            if method == "spanbert":
+                print("CONFIDENCE:", val[2], "\t", "  |SUBJECT:", val[0], "\t", "  |OBJECT:", val[1])
+            elif method == "gpt3":
+                print("SUBJECT:", val[0], "\t", "  |OBJECT:", val[1])
+        print(print("Total # of iterations =", iteration + 1))
 if __name__ == '__main__':
     ise = ISE()
     ise.main()
