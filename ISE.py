@@ -105,7 +105,7 @@ class ISE:
             #f"Sample Output: [{relation}]"
             #print(sentence)
             res = self.get_openai_completion(prompt, model = 'text-davinci-003', max_tokens = 100, temperature = 0.2, top_p = 1, frequency_penalty = 0, presence_penalty =0)
-            print(res)
+            #print(res)
             pattern = r"\[.*?\]"#r"\['(.*?)', '(.*?)', '(.*?)'\]" #rf'.*{relation}.*\((.*),\s*(.*)\)'
             match = re.findall(pattern, res)
             #print(match)
