@@ -38,9 +38,13 @@ class ISE:
 
         # Print the extracted text
         #print(text)
-        text = text.replace("\n", " ")
-        text = re.sub(" +", " ", text)
-        return text
+        #Removing redundant newlines and some whitespace characters
+        preprocessed_text = re.sub(u'\xa0', ' ', text) 
+        preprocessed_text = re.sub('\t+', ' ', preprocessed_text) 
+        preprocessed_text = re.sub('\n+', ' ', preprocessed_text) 
+        preprocessed_text = re.sub(' +', ' ', preprocessed_text) 
+        preprocessed_text = preprocessed_text.replace('\u200b', '')
+        return preprocessed_text
     
     def candidate_entity_pairs(self,sentence,entity_of_interest,subj,obj):
         candidate_pairs = []
@@ -89,23 +93,35 @@ class ISE:
             sentence_text = sentence.text
             #print(sentence_text)
             #prompt = "Given a paragraph, extract all instances of the following relationship types as possilbe ",sentence_text,
-            prompt =  f"Given a paragraph, extract all instances of the '{relation}' relationship types as possible, if nothing is found return no relation\n" + "Output format: ['SUBJECT ENTITY', 'RELATIONSHIP', 'OBJECT ENTITY'].\n"+ f"Sample Paragraph: {sentence_text}"
+            prompt =  (
+                f"Given a paragraph, extract all instances of the '{relation}' relationship types as possible, if nothing is found return no relation\n" 
+                "Output format for one relation: ['SUBJECT ENTITY', 'RELATIONSHIP', 'OBJECT ENTITY'].\n"
+                "If there're multiple satisfying relations, separate them by comma\n" 
+                f"Paragraph: {sentence_text}\n" 
+                "Example output for only one relation founded: ['SUBJECT ENTITY', 'RELATIONSHIP', 'OBJECT ENTITY']\n" 
+                "Example output for multiple relations founded: ['SUBJECT ENTITY1', 'RELATIONSHIP', 'OBJECT ENTITY1'],['SUBJECT ENTITY2', 'RELATIONSHIP', 'OBJECT ENTITY2']\n"
+            )
             #print("This is prompt  ", prompt)
             #f"Sample Output: [{relation}]"
             #print(sentence)
             res = self.get_openai_completion(prompt, model = 'text-davinci-003', max_tokens = 100, temperature = 0.2, top_p = 1, frequency_penalty = 0, presence_penalty =0)
-            pattern = r"\['(.*?)', '(.*?)', '(.*?)'\]" #rf'.*{relation}.*\((.*),\s*(.*)\)'
-            match = re.search(pattern, res)
+            print(res)
+            pattern = r"\[.*?\]"#r"\['(.*?)', '(.*?)', '(.*?)'\]" #rf'.*{relation}.*\((.*),\s*(.*)\)'
+            match = re.findall(pattern, res)
+            #print(match)
             if match:
-                subject, relationship, object = match.groups()
+                for item in match:
+                    pat = r"\['(.*?)', '(.*?)', '(.*?)'\]"
+                    this_match = re.search(pat,item)
+                    subject, relationship, object = this_match.groups()
                 #print("gpt results: " ,subject,object)
-                tup = tuple([subject,object])
-                key = subject + " " + object
-                if key in X.keys():
-                    duplicate_relations.append(tup)
-                else:
-                    X[key] = tup
-                    new_relations.append(tup)    
+                    tup = tuple([subject,object])
+                    key = subject + " " + object
+                    if key in X.keys():
+                        duplicate_relations.append(tup)
+                    else:
+                        X[key] = tup
+                        new_relations.append(tup)    
             # else:
             #     print("No match found")
         time.sleep(1.5)
